@@ -44,7 +44,7 @@ logger = Logger(LOG_CHANNEL_ID)
 intents = discord.Intents.all()
 
 bot = commands.Bot(
-    command_prefix='!', 
+    command_prefix='!',  # Changed to '!'
     self_bot=True, 
     help_command=None, 
     intents=intents
@@ -84,12 +84,12 @@ class MessageTask:
             @self.client.event
             async def on_message(message):
                 if message.author == self.client.user:
-                    if message.content.startswith('/status'):
+                    if message.content.startswith('!status'):
                         await message.channel.send(f"🟢 Bot is running. Sending messages every {self.minutes} minute(s).")
-                    elif message.content.startswith('/stop'):
+                    elif message.content.startswith('!stop'):
                         await self.stop()
                         await message.channel.send("🛑 Bot stopped.")
-                    elif message.content.startswith('/start'):
+                    elif message.content.startswith('!start'):
                         if not self.is_running:
                             await self.start()
                             await message.channel.send("✅ Bot started.")
@@ -139,30 +139,26 @@ async def on_ready():
     print(f'✅ Bot ID: {bot.user.id}')
     print(f'✅ Connected to {len(bot.guilds)} servers')
     print(f'✅ Bot is ready to receive commands!')
-    print(f'📝 Command prefix: /')
+    print(f'📝 Command prefix: !')
 
 @bot.event
 async def on_message(message):
-    # Debug: Print every message
-    print(f"📨 Message: '{message.content}' from {message.author} (ID: {message.author.id}) in {message.channel}")
+    print(f"📨 Message: '{message.content}' from {message.author}")
     
-    # Ignore messages from the bot itself
     if message.author == bot.user:
         print("⏭️ Skipping bot's own message")
         return
     
-    # Check if message starts with prefix
-    if message.content.startswith('/'):
+    if message.content.startswith('!'):
         print(f"🔍 Processing command: {message.content}")
     
-    # Process commands
     await bot.process_commands(message)
 
 # ============ COMMANDS ============
 
 @bot.command(name='test')
 async def test(ctx):
-    """Test command to check if bot is responding"""
+    """Test command"""
     print("✅ Test command triggered!")
     await ctx.send("✅ Test command works! Bot is responding!")
 
@@ -176,7 +172,7 @@ async def ping(ctx):
 async def genkey(ctx, count: int = None):
     print(f"🔑 genkey command triggered by {ctx.author}")
     if not count:
-        await ctx.send("❌ Please specify number of keys. Usage: `/genkey <count>`")
+        await ctx.send("❌ Please specify number of keys. Usage: `!genkey <count>`")
         return
     if count < 1:
         await ctx.send("❌ Count must be at least 1.")
@@ -214,12 +210,12 @@ async def listkey(ctx):
 async def claim(ctx, key=None):
     print(f"🔑 claim command triggered by {ctx.author}")
     if not key:
-        await ctx.send("❌ Please provide a key. Usage: `/claim <key>`")
+        await ctx.send("❌ Please provide a key. Usage: `!claim <key>`")
         return
     user_id = str(ctx.author.id)
     username = ctx.author.name
     if key_manager.claim_key(key, user_id, username):
-        await ctx.send(f"✅ Key claimed successfully! Use `/panel` to set up your bot.")
+        await ctx.send(f"✅ Key claimed successfully! Use `!panel` to set up your bot.")
         await logger.log_key_claim(username, key)
     else:
         await ctx.send("❌ Invalid or already claimed key.")
@@ -232,10 +228,10 @@ async def panel(ctx):
     
     has_key = key_manager.has_claimed_key(user_id)
     if not has_key:
-        await ctx.send("❌ You need to claim a key first using `/claim <key>`")
+        await ctx.send("❌ You need to claim a key first using `!claim <key>`")
         return
     if user_id in config['active_sessions']:
-        await ctx.send("⚠️ You already have an active session. Use `/stop` to stop it first.")
+        await ctx.send("⚠️ You already have an active session. Use `!stop` to stop it first.")
         return
     
     config['panel_settings'][user_id] = {
@@ -254,8 +250,8 @@ Please provide the following information (one per line):
 3. Minutes between messages (1 minute = 1 message)
 4. Message to send
 
-Type `/done` when finished.
-Type `/cancel` to cancel.
+Type `!done` when finished.
+Type `!cancel` to cancel.
 """)
 
     def check(m):
@@ -267,12 +263,12 @@ Type `/cancel` to cancel.
     while field_index < len(required_fields):
         try:
             msg = await bot.wait_for('message', timeout=300.0, check=check)
-            if msg.content.lower() == '/cancel':
+            if msg.content.lower() == '!cancel':
                 del config['panel_settings'][user_id]
                 save_config(config)
                 await ctx.send("❌ Setup cancelled.")
                 return
-            if msg.content.lower() == '/done':
+            if msg.content.lower() == '!done':
                 if field_index > 0:
                     break
                 else:
@@ -309,14 +305,14 @@ Type `/cancel` to cancel.
                 await ctx.send(f"✅ Received. Next: {required_fields[field_index].title()}")
             
         except asyncio.TimeoutError:
-            await ctx.send("❌ Setup timed out. Please start over with `/panel`")
+            await ctx.send("❌ Setup timed out. Please start over with `!panel`")
             del config['panel_settings'][user_id]
             save_config(config)
             return
     
     save_config(config)
     await logger.log_panel_setup(username)
-    await ctx.send("✅ Setup complete! Use `/start` to begin sending messages.")
+    await ctx.send("✅ Setup complete! Use `!start` to begin sending messages.")
 
 @bot.command(name='start')
 async def start_bot(ctx):
@@ -324,7 +320,7 @@ async def start_bot(ctx):
     user_id = str(ctx.author.id)
     username = ctx.author.name
     if user_id not in config['panel_settings']:
-        await ctx.send("❌ Please set up the bot first using `/panel`")
+        await ctx.send("❌ Please set up the bot first using `!panel`")
         return
     if user_id in running_tasks and running_tasks[user_id].is_running:
         await ctx.send("⚠️ Bot is already running.")
@@ -332,7 +328,7 @@ async def start_bot(ctx):
     
     settings = config['panel_settings'][user_id]
     if not all([settings['token'], settings['channel_ids'], settings['message']]):
-        await ctx.send("❌ Incomplete settings. Please use `/panel` to set up again.")
+        await ctx.send("❌ Incomplete settings. Please use `!panel` to set up again.")
         return
     
     task = MessageTask(
@@ -387,24 +383,24 @@ async def help_command(ctx):
 **🤖 Discord Self-Bot Commands:**
 
 **🔒 Admin Only:**
-`/genkey <count>` - Generate new keys (max 100)
-`/listkey` - List all available keys
+`!genkey <count>` - Generate new keys (max 100)
+`!listkey` - List all available keys
 
 **👥 Public Commands:**
-`/claim <key>` - Claim a key (anyone can use)
-`/panel` - Set up your bot configuration
-`/start` - Start sending messages
-`/status` - Check if the bot is running
-`/stop` - Stop the bot
-`/test` - Test if bot is responding
-`/ping` - Check bot latency
-`/help` - Show this help message
+`!claim <key>` - Claim a key (anyone can use)
+`!panel` - Set up your bot configuration
+`!start` - Start sending messages
+`!status` - Check if the bot is running
+`!stop` - Stop the bot
+`!test` - Test if bot is responding
+`!ping` - Check bot latency
+`!help` - Show this help message
 
 **Setup Process:**
 1. Get a key from an admin
-2. Claim your key: `/claim your_key_here`
-3. Set up your configuration: `/panel`
-4. Start the bot: `/start`
+2. Claim your key: `!claim your_key_here`
+3. Set up your configuration: `!panel`
+4. Start the bot: `!start`
 
 **⚠️ Warning:** This is a self-bot and violates Discord's ToS. Use at your own risk.
     """
@@ -417,7 +413,7 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
         await ctx.send("❌ **Access Denied!** This command is for admins only.")
     elif isinstance(error, commands.CommandNotFound):
-        await ctx.send("❌ Unknown command. Use `/help` for available commands.")
+        await ctx.send("❌ Unknown command. Use `!help` for available commands.")
     else:
         await ctx.send(f"❌ Error: {str(error)}")
 
