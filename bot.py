@@ -44,12 +44,17 @@ config = load_config()
 key_manager = KeyManager(config)
 logger = Logger(LOG_CHANNEL_ID)
 
-# ============ BOT SETUP WITH INTENTS ============
+# ============ BOT SETUP WITH MINIMAL INTENTS ============
+# For self-bots, only use default intents
+# NO privileged intents (message_content, members, presences)
 intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
 
-bot = commands.Bot(command_prefix='/', self_bot=True, help_command=None, intents=intents)
+bot = commands.Bot(
+    command_prefix='/', 
+    self_bot=True, 
+    help_command=None, 
+    intents=intents
+)
 # ==============================================
 
 # Dictionary to store running tasks
@@ -73,7 +78,8 @@ class MessageTask:
             return False
         
         try:
-            self.client = discord.Client(intents=intents)
+            # Use default intents for self-bot
+            self.client = discord.Client(intents=discord.Intents.default())
             
             @self.client.event
             async def on_ready():
@@ -101,10 +107,6 @@ class MessageTask:
                             await message.channel.send("✅ Bot started.")
                         else:
                             await message.channel.send("⚠️ Bot is already running.")
-            
-            @self.client.event
-            async def on_ready():
-                print(f'[{self.username}] Bot ready!')
             
             @tasks.loop(minutes=self.minutes)
             async def loop_messages():
