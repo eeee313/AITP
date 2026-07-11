@@ -11,7 +11,8 @@ from logger import Logger
 
 # ============ ADMIN CONFIGURATION ============
 ADMIN_IDS = [
-    '1504975069305245748',
+    '1504975069305245748',   # Admin user ID
+    '1173953184113360910',   # Another admin user
 ]
 
 def is_admin(ctx):
@@ -44,7 +45,7 @@ logger = Logger(LOG_CHANNEL_ID)
 intents = discord.Intents.all()
 
 bot = commands.Bot(
-    command_prefix='!',  # Changed to '!'
+    command_prefix='!',  # Using ! prefix
     self_bot=True, 
     help_command=None, 
     intents=intents
