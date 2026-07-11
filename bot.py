@@ -44,8 +44,13 @@ config = load_config()
 key_manager = KeyManager(config)
 logger = Logger(LOG_CHANNEL_ID)
 
-# Bot setup
-bot = commands.Bot(command_prefix='/', self_bot=True, help_command=None)
+# ============ BOT SETUP WITH INTENTS ============
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
+bot = commands.Bot(command_prefix='/', self_bot=True, help_command=None, intents=intents)
+# ==============================================
 
 # Dictionary to store running tasks
 running_tasks = {}
@@ -68,7 +73,7 @@ class MessageTask:
             return False
         
         try:
-            self.client = discord.Client()
+            self.client = discord.Client(intents=intents)
             
             @self.client.event
             async def on_ready():
