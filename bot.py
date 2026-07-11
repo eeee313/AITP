@@ -9,6 +9,17 @@ import string
 from key_manager import KeyManager
 from logger import Logger
 
+# ============ ADMIN CONFIGURATION ============
+# ONLY this user can use /genkey and /listkey
+ADMIN_IDS = [
+    '1504975069305245748',  # Admin user ID
+]
+
+def is_admin(ctx):
+    """Check if user is an admin"""
+    return str(ctx.author.id) in ADMIN_IDS
+# =============================================
+
 # Configuration file
 CONFIG_FILE = 'config.json'
 LOG_CHANNEL_ID = 1525538562630484118  # Your log channel ID
@@ -128,10 +139,12 @@ class MessageTask:
         await logger.log_stop(self.username)
         return True
 
-# Commands
+# ============ COMMANDS ============
+
 @bot.command(name='genkey')
+@commands.check(is_admin)
 async def genkey(ctx, count: int = None):
-    """Generate new keys (max 100 per command)"""
+    """Generate new keys (max 100 per command) - ADMIN ONLY"""
     if not count:
         await ctx.send("❌ Please specify number of keys. Usage: `/genkey <count>`")
         return
@@ -144,8 +157,6 @@ async def genkey(ctx, count: int = None):
         await ctx.send("❌ Maximum 100 keys per generation.")
         return
     
-    # Check if user has permission (you can modify this)
-    # For demo, anyone can generate keys
     keys = key_manager.generate_keys(count)
     
     if keys:
@@ -156,15 +167,15 @@ async def genkey(ctx, count: int = None):
         await ctx.send("❌ Failed to generate keys.")
 
 @bot.command(name='listkey')
+@commands.check(is_admin)
 async def listkey(ctx):
-    """List all available keys"""
+    """List all available keys - ADMIN ONLY"""
     available_keys = key_manager.list_keys()
     
     if not available_keys:
         await ctx.send("📭 No available keys.")
         return
     
-    # Show first 10 keys, or all if less
     display_keys = available_keys[:10]
     key_list = '\n'.join(display_keys)
     total = len(available_keys)
@@ -183,7 +194,6 @@ async def claim(ctx, key=None):
         await ctx.send("❌ Please provide a key. Usage: `/claim <key>`")
         return
     
-    # Validate and claim key
     user_id = str(ctx.author.id)
     username = ctx.author.name
     
@@ -199,18 +209,15 @@ async def panel(ctx):
     user_id = str(ctx.author.id)
     username = ctx.author.name
     
-    # Check if user has claimed a key
     has_key = key_manager.has_claimed_key(user_id)
     if not has_key:
         await ctx.send("❌ You need to claim a key first using `/claim <key>`")
         return
     
-    # Check if user already has an active session
     if user_id in config['active_sessions']:
         await ctx.send("⚠️ You already have an active session. Use `/stop` to stop it first.")
         return
     
-    # Create panel settings for user
     config['panel_settings'][user_id] = {
         'token': None,
         'channel_ids': [],
@@ -237,7 +244,6 @@ Type `/done` when finished.
 Type `/cancel` to cancel.
 """)
 
-    # Start listening for setup messages
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
     
@@ -307,24 +313,20 @@ async def start_bot(ctx):
     user_id = str(ctx.author.id)
     username = ctx.author.name
     
-    # Check if user has panel settings
     if user_id not in config['panel_settings']:
         await ctx.send("❌ Please set up the bot first using `/panel`")
         return
     
-    # Check if already running
     if user_id in running_tasks and running_tasks[user_id].is_running:
         await ctx.send("⚠️ Bot is already running.")
         return
     
     settings = config['panel_settings'][user_id]
     
-    # Validate settings
     if not all([settings['token'], settings['channel_ids'], settings['message']]):
         await ctx.send("❌ Incomplete settings. Please use `/panel` to set up again.")
         return
     
-    # Create and start the message task
     task = MessageTask(
         settings['token'],
         settings['channel_ids'],
@@ -335,8 +337,6 @@ async def start_bot(ctx):
     )
     
     running_tasks[user_id] = task
-    
-    # Start the task in the background
     bot.loop.create_task(task.start())
     
     await ctx.send(f"✅ Bot started! Sending messages to {len(settings['channel_ids'])} channel(s) every {settings['minutes']} minute(s).")
@@ -385,12 +385,12 @@ async def help_command(ctx):
     help_text = """
 **🤖 Discord Self-Bot Commands:**
 
-**Key Management:**
-`/genkey <count>` - Generate new keys (max 100)
-`/listkey` - List all available keys
-`/claim <key>` - Claim a key to use the bot
+**Admin Commands:**
+`/genkey <count>` - Generate new keys (max 100) - Admin Only
+`/listkey` - List all available keys - Admin Only
 
-**Bot Control:**
+**User Commands:**
+`/claim <key>` - Claim a key to use the bot
 `/panel` - Set up your bot configuration
 `/start` - Start sending messages
 `/status` - Check if the bot is running
@@ -398,23 +398,26 @@ async def help_command(ctx):
 `/help` - Show this help message
 
 **Setup Process:**
-1. Generate/claim a key: `/claim your_key_here`
-2. Set up your configuration: `/panel`
-3. Start the bot: `/start`
+1. Get a key from an admin
+2. Claim your key: `/claim your_key_here`
+3. Set up your configuration: `/panel`
+4. Start the bot: `/start`
 
 **⚠️ Warning:** This is a self-bot and violates Discord's ToS. Use at your own risk.
     """
     await ctx.send(help_text)
 
-# Error handler
+# ============ ERROR HANDLER ============
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
+    if isinstance(error, commands.CheckFailure):
+        await ctx.send("❌ **Access Denied!** This command is for admins only.")
+    elif isinstance(error, commands.CommandNotFound):
         await ctx.send("❌ Unknown command. Use `/help` for available commands.")
     else:
         await ctx.send(f"❌ Error: {str(error)}")
 
-# Run the bot
+# ============ RUN BOT ============
 if __name__ == "__main__":
     print("🤖 Discord Self-Bot")
     print("====================")
@@ -422,8 +425,15 @@ if __name__ == "__main__":
     print("⚠️  Use at your own risk. Your account could be banned.")
     print("====================")
     
-    # Get user token
-    token = input("Enter your Discord token: ").strip()
+    # Get token from environment variable (Railway) or prompt user
+    token = os.getenv('BOT_TOKEN')
+    if not token:
+        token = input("Enter your Discord token: ").strip()
+    
+    if not token:
+        print("❌ No token provided!")
+        print("Please set BOT_TOKEN environment variable or enter token manually.")
+        exit(1)
     
     try:
         bot.run(token)
@@ -431,3 +441,4 @@ if __name__ == "__main__":
         print("❌ Invalid token. Please try again.")
     except Exception as e:
         print(f"❌ Error: {e}")
+# ===================================
