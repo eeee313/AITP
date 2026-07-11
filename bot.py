@@ -44,7 +44,7 @@ logger = Logger(LOG_CHANNEL_ID)
 intents = discord.Intents.all()
 
 bot = commands.Bot(
-    command_prefix='/', 
+    command_prefix='!', 
     self_bot=True, 
     help_command=None, 
     intents=intents
