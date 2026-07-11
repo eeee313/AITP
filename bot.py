@@ -22,9 +22,8 @@ def is_admin(ctx):
 
 # Configuration file
 CONFIG_FILE = 'config.json'
-LOG_CHANNEL_ID = 1525538562630484118  # Your log channel ID
+LOG_CHANNEL_ID = 1525538562630484118
 
-# Load or create config
 def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r') as f:
@@ -44,10 +43,8 @@ config = load_config()
 key_manager = KeyManager(config)
 logger = Logger(LOG_CHANNEL_ID)
 
-# ============ BOT SETUP WITH MINIMAL INTENTS ============
-# For self-bots, only use default intents
-# NO privileged intents (message_content, members, presences)
-intents = discord.Intents.default()
+# ============ BOT SETUP ============
+intents = discord.Intents.all()
 
 bot = commands.Bot(
     command_prefix='/', 
@@ -55,9 +52,8 @@ bot = commands.Bot(
     help_command=None, 
     intents=intents
 )
-# ==============================================
+# ===================================
 
-# Dictionary to store running tasks
 running_tasks = {}
 
 class MessageTask:
@@ -78,18 +74,13 @@ class MessageTask:
             return False
         
         try:
-            # Use default intents for self-bot
-            self.client = discord.Client(intents=discord.Intents.default())
+            self.client = discord.Client(intents=discord.Intents.all())
             
             @self.client.event
             async def on_ready():
                 print(f'[{self.username}] Bot connected as {self.client.user}')
                 self.is_running = True
-                
-                # Log startup
                 await logger.log_startup(self.username, len(self.channel_ids), self.minutes)
-                
-                # Start the scheduled task
                 if self.loop_messages:
                     self.loop_messages.start()
             
@@ -112,7 +103,6 @@ class MessageTask:
             async def loop_messages():
                 if not self.is_running:
                     return
-                
                 try:
                     for channel_id in self.channel_ids:
                         channel = self.client.get_channel(int(channel_id))
@@ -128,7 +118,6 @@ class MessageTask:
                     await logger.log_error(self.username, str(e))
             
             self.loop_messages = loop_messages
-            
             await self.client.start(self.token)
             return True
             
@@ -146,26 +135,38 @@ class MessageTask:
         await logger.log_stop(self.username)
         return True
 
+# ============ EVENTS ============
+@bot.event
+async def on_ready():
+    print(f'✅ Bot logged in as {bot.user}')
+    print(f'✅ Bot ID: {bot.user.id}')
+    print(f'✅ Connected to {len(bot.guilds)} servers')
+    print(f'✅ Bot is ready to receive commands!')
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+    await bot.process_commands(message)
+
 # ============ COMMANDS ============
 
+# ===== ADMIN ONLY COMMANDS =====
 @bot.command(name='genkey')
 @commands.check(is_admin)
 async def genkey(ctx, count: int = None):
-    """Generate new keys (max 100 per command) - ADMIN ONLY"""
+    """Generate new keys (max 100) - ADMIN ONLY"""
     if not count:
         await ctx.send("❌ Please specify number of keys. Usage: `/genkey <count>`")
         return
-    
     if count < 1:
         await ctx.send("❌ Count must be at least 1.")
         return
-    
     if count > 100:
         await ctx.send("❌ Maximum 100 keys per generation.")
         return
     
     keys = key_manager.generate_keys(count)
-    
     if keys:
         key_list = '\n'.join(keys)
         await ctx.send(f"✅ Generated {len(keys)} key(s):\n```\n{key_list}\n```")
@@ -178,32 +179,27 @@ async def genkey(ctx, count: int = None):
 async def listkey(ctx):
     """List all available keys - ADMIN ONLY"""
     available_keys = key_manager.list_keys()
-    
     if not available_keys:
         await ctx.send("📭 No available keys.")
         return
-    
     display_keys = available_keys[:10]
     key_list = '\n'.join(display_keys)
     total = len(available_keys)
-    
     if total > 10:
         await ctx.send(f"📋 Available keys ({total} total, showing first 10):\n```\n{key_list}\n```")
     else:
         await ctx.send(f"📋 Available keys ({total} total):\n```\n{key_list}\n```")
-    
     await logger.log_list_keys(ctx.author.name)
 
+# ===== PUBLIC COMMANDS (Anyone can use) =====
 @bot.command(name='claim')
 async def claim(ctx, key=None):
-    """Claim a key to use the bot"""
+    """Claim a key - ANYONE can use"""
     if not key:
         await ctx.send("❌ Please provide a key. Usage: `/claim <key>`")
         return
-    
     user_id = str(ctx.author.id)
     username = ctx.author.name
-    
     if key_manager.claim_key(key, user_id, username):
         await ctx.send(f"✅ Key claimed successfully! Use `/panel` to set up your bot.")
         await logger.log_key_claim(username, key)
@@ -212,7 +208,7 @@ async def claim(ctx, key=None):
 
 @bot.command(name='panel')
 async def panel(ctx):
-    """Set up the bot configuration"""
+    """Set up bot configuration - ANYONE with a key can use"""
     user_id = str(ctx.author.id)
     username = ctx.author.name
     
@@ -220,7 +216,6 @@ async def panel(ctx):
     if not has_key:
         await ctx.send("❌ You need to claim a key first using `/claim <key>`")
         return
-    
     if user_id in config['active_sessions']:
         await ctx.send("⚠️ You already have an active session. Use `/stop` to stop it first.")
         return
@@ -241,12 +236,6 @@ Please provide the following information (one per line):
 3. Minutes between messages (1 minute = 1 message)
 4. Message to send
 
-Example:
-`token_here`
-`1234567890,0987654321`
-`5`
-`Hello everyone!`
-
 Type `/done` when finished.
 Type `/cancel` to cancel.
 """)
@@ -260,13 +249,11 @@ Type `/cancel` to cancel.
     while field_index < len(required_fields):
         try:
             msg = await bot.wait_for('message', timeout=300.0, check=check)
-            
             if msg.content.lower() == '/cancel':
                 del config['panel_settings'][user_id]
                 save_config(config)
                 await ctx.send("❌ Setup cancelled.")
                 return
-            
             if msg.content.lower() == '/done':
                 if field_index > 0:
                     break
@@ -274,9 +261,9 @@ Type `/cancel` to cancel.
                     await ctx.send("❌ You haven't provided all required information yet.")
                     continue
             
-            if field_index == 0:  # token
+            if field_index == 0:
                 config['panel_settings'][user_id]['token'] = msg.content.strip()
-            elif field_index == 1:  # channel_ids
+            elif field_index == 1:
                 try:
                     channels = [ch.strip() for ch in msg.content.split(',') if ch.strip()]
                     if len(channels) > 10:
@@ -286,7 +273,7 @@ Type `/cancel` to cancel.
                 except Exception:
                     await ctx.send("❌ Invalid channel IDs. Please use comma-separated numbers.")
                     continue
-            elif field_index == 2:  # minutes
+            elif field_index == 2:
                 try:
                     minutes = int(msg.content.strip())
                     if minutes < 1:
@@ -296,11 +283,10 @@ Type `/cancel` to cancel.
                 except ValueError:
                     await ctx.send("❌ Please enter a valid number.")
                     continue
-            elif field_index == 3:  # message
+            elif field_index == 3:
                 config['panel_settings'][user_id]['message'] = msg.content.strip()
             
             field_index += 1
-            
             if field_index < len(required_fields):
                 await ctx.send(f"✅ Received. Next: {required_fields[field_index].title()}")
             
@@ -316,20 +302,17 @@ Type `/cancel` to cancel.
 
 @bot.command(name='start')
 async def start_bot(ctx):
-    """Start the message sending bot"""
+    """Start sending messages - ANYONE with panel setup can use"""
     user_id = str(ctx.author.id)
     username = ctx.author.name
-    
     if user_id not in config['panel_settings']:
         await ctx.send("❌ Please set up the bot first using `/panel`")
         return
-    
     if user_id in running_tasks and running_tasks[user_id].is_running:
         await ctx.send("⚠️ Bot is already running.")
         return
     
     settings = config['panel_settings'][user_id]
-    
     if not all([settings['token'], settings['channel_ids'], settings['message']]):
         await ctx.send("❌ Incomplete settings. Please use `/panel` to set up again.")
         return
@@ -342,26 +325,21 @@ async def start_bot(ctx):
         user_id,
         username
     )
-    
     running_tasks[user_id] = task
     bot.loop.create_task(task.start())
-    
     await ctx.send(f"✅ Bot started! Sending messages to {len(settings['channel_ids'])} channel(s) every {settings['minutes']} minute(s).")
     await logger.log_start_command(username)
 
 @bot.command(name='status')
 async def status(ctx):
-    """Check if the bot is running"""
+    """Check bot status - ANYONE can use"""
     user_id = str(ctx.author.id)
     username = ctx.author.name
-    
     if user_id in running_tasks and running_tasks[user_id].is_running:
         settings = config['panel_settings'].get(user_id, {})
         channel_count = len(settings.get('channel_ids', []))
         minutes = settings.get('minutes', 1)
-        await ctx.send(f"🟢 **Bot Status**: Running\n"
-                      f"📡 Channels: {channel_count}\n"
-                      f"⏱️ Interval: {minutes} minute(s)")
+        await ctx.send(f"🟢 **Bot Status**: Running\n📡 Channels: {channel_count}\n⏱️ Interval: {minutes} minute(s)")
         await logger.log_status_check(username, True)
     else:
         await ctx.send("🔴 **Bot Status**: Not running")
@@ -369,14 +347,12 @@ async def status(ctx):
 
 @bot.command(name='stop')
 async def stop_bot(ctx):
-    """Stop the bot"""
+    """Stop the bot - ANYONE can use"""
     user_id = str(ctx.author.id)
     username = ctx.author.name
-    
     if user_id not in running_tasks:
         await ctx.send("❌ No active bot session found.")
         return
-    
     task = running_tasks[user_id]
     if task.is_running:
         await task.stop()
@@ -388,16 +364,16 @@ async def stop_bot(ctx):
 
 @bot.command(name='help')
 async def help_command(ctx):
-    """Show available commands"""
+    """Show help - EVERYONE can use"""
     help_text = """
 **🤖 Discord Self-Bot Commands:**
 
-**Admin Commands:**
-`/genkey <count>` - Generate new keys (max 100) - Admin Only
-`/listkey` - List all available keys - Admin Only
+**🔒 Admin Only:**
+`/genkey <count>` - Generate new keys (max 100)
+`/listkey` - List all available keys
 
-**User Commands:**
-`/claim <key>` - Claim a key to use the bot
+**👥 Public Commands:**
+`/claim <key>` - Claim a key (anyone can use)
 `/panel` - Set up your bot configuration
 `/start` - Start sending messages
 `/status` - Check if the bot is running
@@ -432,7 +408,6 @@ if __name__ == "__main__":
     print("⚠️  Use at your own risk. Your account could be banned.")
     print("====================")
     
-    # Get token from environment variable (Railway) or prompt user
     token = os.getenv('BOT_TOKEN')
     if not token:
         token = input("Enter your Discord token: ").strip()
@@ -448,4 +423,3 @@ if __name__ == "__main__":
         print("❌ Invalid token. Please try again.")
     except Exception as e:
         print(f"❌ Error: {e}")
-# ===================================
