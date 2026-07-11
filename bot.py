@@ -10,17 +10,14 @@ from key_manager import KeyManager
 from logger import Logger
 
 # ============ ADMIN CONFIGURATION ============
-# ONLY this user can use /genkey and /listkey
 ADMIN_IDS = [
-    '1504975069305245748',  # Admin user ID
+    '1504975069305245748',
 ]
 
 def is_admin(ctx):
-    """Check if user is an admin"""
     return str(ctx.author.id) in ADMIN_IDS
 # =============================================
 
-# Configuration file
 CONFIG_FILE = 'config.json'
 LOG_CHANNEL_ID = 1525538562630484118
 
@@ -142,20 +139,42 @@ async def on_ready():
     print(f'✅ Bot ID: {bot.user.id}')
     print(f'✅ Connected to {len(bot.guilds)} servers')
     print(f'✅ Bot is ready to receive commands!')
+    print(f'📝 Command prefix: /')
 
 @bot.event
 async def on_message(message):
+    # Debug: Print every message
+    print(f"📨 Message: '{message.content}' from {message.author} (ID: {message.author.id}) in {message.channel}")
+    
+    # Ignore messages from the bot itself
     if message.author == bot.user:
+        print("⏭️ Skipping bot's own message")
         return
+    
+    # Check if message starts with prefix
+    if message.content.startswith('/'):
+        print(f"🔍 Processing command: {message.content}")
+    
+    # Process commands
     await bot.process_commands(message)
 
 # ============ COMMANDS ============
 
-# ===== ADMIN ONLY COMMANDS =====
+@bot.command(name='test')
+async def test(ctx):
+    """Test command to check if bot is responding"""
+    print("✅ Test command triggered!")
+    await ctx.send("✅ Test command works! Bot is responding!")
+
+@bot.command(name='ping')
+async def ping(ctx):
+    """Check bot latency"""
+    await ctx.send(f"🏓 Pong! Latency: {round(bot.latency * 1000)}ms")
+
 @bot.command(name='genkey')
 @commands.check(is_admin)
 async def genkey(ctx, count: int = None):
-    """Generate new keys (max 100) - ADMIN ONLY"""
+    print(f"🔑 genkey command triggered by {ctx.author}")
     if not count:
         await ctx.send("❌ Please specify number of keys. Usage: `/genkey <count>`")
         return
@@ -177,7 +196,7 @@ async def genkey(ctx, count: int = None):
 @bot.command(name='listkey')
 @commands.check(is_admin)
 async def listkey(ctx):
-    """List all available keys - ADMIN ONLY"""
+    print(f"📋 listkey command triggered by {ctx.author}")
     available_keys = key_manager.list_keys()
     if not available_keys:
         await ctx.send("📭 No available keys.")
@@ -191,10 +210,9 @@ async def listkey(ctx):
         await ctx.send(f"📋 Available keys ({total} total):\n```\n{key_list}\n```")
     await logger.log_list_keys(ctx.author.name)
 
-# ===== PUBLIC COMMANDS (Anyone can use) =====
 @bot.command(name='claim')
 async def claim(ctx, key=None):
-    """Claim a key - ANYONE can use"""
+    print(f"🔑 claim command triggered by {ctx.author}")
     if not key:
         await ctx.send("❌ Please provide a key. Usage: `/claim <key>`")
         return
@@ -208,7 +226,7 @@ async def claim(ctx, key=None):
 
 @bot.command(name='panel')
 async def panel(ctx):
-    """Set up bot configuration - ANYONE with a key can use"""
+    print(f"📋 panel command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
     
@@ -302,7 +320,7 @@ Type `/cancel` to cancel.
 
 @bot.command(name='start')
 async def start_bot(ctx):
-    """Start sending messages - ANYONE with panel setup can use"""
+    print(f"▶️ start command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
     if user_id not in config['panel_settings']:
@@ -332,7 +350,7 @@ async def start_bot(ctx):
 
 @bot.command(name='status')
 async def status(ctx):
-    """Check bot status - ANYONE can use"""
+    print(f"📊 status command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
     if user_id in running_tasks and running_tasks[user_id].is_running:
@@ -347,7 +365,7 @@ async def status(ctx):
 
 @bot.command(name='stop')
 async def stop_bot(ctx):
-    """Stop the bot - ANYONE can use"""
+    print(f"⏹️ stop command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
     if user_id not in running_tasks:
@@ -364,7 +382,7 @@ async def stop_bot(ctx):
 
 @bot.command(name='help')
 async def help_command(ctx):
-    """Show help - EVERYONE can use"""
+    print(f"❓ help command triggered by {ctx.author}")
     help_text = """
 **🤖 Discord Self-Bot Commands:**
 
@@ -378,6 +396,8 @@ async def help_command(ctx):
 `/start` - Start sending messages
 `/status` - Check if the bot is running
 `/stop` - Stop the bot
+`/test` - Test if bot is responding
+`/ping` - Check bot latency
 `/help` - Show this help message
 
 **Setup Process:**
@@ -393,6 +413,7 @@ async def help_command(ctx):
 # ============ ERROR HANDLER ============
 @bot.event
 async def on_command_error(ctx, error):
+    print(f"❌ Error: {error}")
     if isinstance(error, commands.CheckFailure):
         await ctx.send("❌ **Access Denied!** This command is for admins only.")
     elif isinstance(error, commands.CommandNotFound):
