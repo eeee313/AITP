@@ -45,7 +45,7 @@ logger = Logger(LOG_CHANNEL_ID)
 intents = discord.Intents.all()
 
 bot = commands.Bot(
-    command_prefix='!',  # Using ! prefix
+    command_prefix='!',
     self_bot=True, 
     help_command=None, 
     intents=intents
@@ -159,13 +159,11 @@ async def on_message(message):
 
 @bot.command(name='test')
 async def test(ctx):
-    """Test command"""
     print("✅ Test command triggered!")
     await ctx.send("✅ Test command works! Bot is responding!")
 
 @bot.command(name='ping')
 async def ping(ctx):
-    """Check bot latency"""
     await ctx.send(f"🏓 Pong! Latency: {round(bot.latency * 1000)}ms")
 
 @bot.command(name='genkey')
@@ -223,103 +221,114 @@ async def claim(ctx, key=None):
 
 @bot.command(name='panel')
 async def panel(ctx):
+    """Private panel setup via DM"""
     print(f"📋 panel command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
     
+    # Check if user has a key
     has_key = key_manager.has_claimed_key(user_id)
     if not has_key:
         await ctx.send("❌ You need to claim a key first using `!claim <key>`")
         return
+    
     if user_id in config['active_sessions']:
         await ctx.send("⚠️ You already have an active session. Use `!stop` to stop it first.")
         return
     
-    config['panel_settings'][user_id] = {
-        'token': None,
-        'channel_ids': [],
-        'minutes': 1,
-        'message': None,
-        'username': username
-    }
-    save_config(config)
-    
-    await ctx.send("""📋 **Panel Setup**
-Please provide the following information (one per line):
-1. Discord Token
-2. Channel IDs (comma-separated, max 10)
-3. Minutes between messages (1 minute = 1 message)
-4. Message to send
-
-Type `!done` when finished.
-Type `!cancel` to cancel.
-""")
-
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel
-    
-    required_fields = ['token', 'channel_ids', 'minutes', 'message']
-    field_index = 0
-    
-    while field_index < len(required_fields):
-        try:
-            msg = await bot.wait_for('message', timeout=300.0, check=check)
-            if msg.content.lower() == '!cancel':
+    # Try to send DM
+    try:
+        dm_channel = await ctx.author.create_dm()
+        await dm_channel.send("📋 **Private Panel Setup**\nPlease provide the following information (one per line):\n1. Discord Token\n2. Channel IDs (comma-separated, max 10)\n3. Minutes between messages (1 minute = 1 message)\n4. Message to send\n\nType `!done` when finished.\nType `!cancel` to cancel.")
+        
+        # Initialize panel settings
+        config['panel_settings'][user_id] = {
+            'token': None,
+            'channel_ids': [],
+            'minutes': 1,
+            'message': None,
+            'username': username
+        }
+        save_config(config)
+        
+        await ctx.send("✅ I've sent you a DM with the setup instructions. Check your DMs!")
+        
+        # Setup in DM
+        def check(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+        
+        required_fields = ['token', 'channel_ids', 'minutes', 'message']
+        field_index = 0
+        
+        while field_index < len(required_fields):
+            try:
+                msg = await bot.wait_for('message', timeout=300.0, check=check)
+                
+                if msg.content.lower() == '!cancel':
+                    del config['panel_settings'][user_id]
+                    save_config(config)
+                    await dm_channel.send("❌ Setup cancelled.")
+                    return
+                
+                if msg.content.lower() == '!done':
+                    if field_index > 0:
+                        break
+                    else:
+                        await dm_channel.send("❌ You haven't provided all required information yet.")
+                        continue
+                
+                if field_index == 0:
+                    config['panel_settings'][user_id]['token'] = msg.content.strip()
+                    await dm_channel.send("✅ Token received. Next: Channel IDs (comma-separated, max 10)")
+                elif field_index == 1:
+                    try:
+                        channels = [ch.strip() for ch in msg.content.split(',') if ch.strip()]
+                        if len(channels) > 10:
+                            await dm_channel.send("❌ Maximum 10 channels allowed. Please try again.")
+                            continue
+                        config['panel_settings'][user_id]['channel_ids'] = channels
+                        await dm_channel.send(f"✅ {len(channels)} channel(s) received. Next: Minutes between messages (minimum 1)")
+                    except Exception:
+                        await dm_channel.send("❌ Invalid channel IDs. Please use comma-separated numbers.")
+                        continue
+                elif field_index == 2:
+                    try:
+                        minutes = int(msg.content.strip())
+                        if minutes < 1:
+                            await dm_channel.send("❌ Minutes must be at least 1. Please try again.")
+                            continue
+                        config['panel_settings'][user_id]['minutes'] = minutes
+                        await dm_channel.send(f"✅ {minutes} minute(s) received. Next: Message to send")
+                    except ValueError:
+                        await dm_channel.send("❌ Please enter a valid number.")
+                        continue
+                elif field_index == 3:
+                    config['panel_settings'][user_id]['message'] = msg.content.strip()
+                    await dm_channel.send("✅ Message received!")
+                
+                field_index += 1
+                
+            except asyncio.TimeoutError:
+                await dm_channel.send("❌ Setup timed out. Please start over with `!panel`")
                 del config['panel_settings'][user_id]
                 save_config(config)
-                await ctx.send("❌ Setup cancelled.")
                 return
-            if msg.content.lower() == '!done':
-                if field_index > 0:
-                    break
-                else:
-                    await ctx.send("❌ You haven't provided all required information yet.")
-                    continue
-            
-            if field_index == 0:
-                config['panel_settings'][user_id]['token'] = msg.content.strip()
-            elif field_index == 1:
-                try:
-                    channels = [ch.strip() for ch in msg.content.split(',') if ch.strip()]
-                    if len(channels) > 10:
-                        await ctx.send("❌ Maximum 10 channels allowed. Please try again.")
-                        continue
-                    config['panel_settings'][user_id]['channel_ids'] = channels
-                except Exception:
-                    await ctx.send("❌ Invalid channel IDs. Please use comma-separated numbers.")
-                    continue
-            elif field_index == 2:
-                try:
-                    minutes = int(msg.content.strip())
-                    if minutes < 1:
-                        await ctx.send("❌ Minutes must be at least 1.")
-                        continue
-                    config['panel_settings'][user_id]['minutes'] = minutes
-                except ValueError:
-                    await ctx.send("❌ Please enter a valid number.")
-                    continue
-            elif field_index == 3:
-                config['panel_settings'][user_id]['message'] = msg.content.strip()
-            
-            field_index += 1
-            if field_index < len(required_fields):
-                await ctx.send(f"✅ Received. Next: {required_fields[field_index].title()}")
-            
-        except asyncio.TimeoutError:
-            await ctx.send("❌ Setup timed out. Please start over with `!panel`")
-            del config['panel_settings'][user_id]
-            save_config(config)
-            return
-    
-    save_config(config)
-    await logger.log_panel_setup(username)
-    await ctx.send("✅ Setup complete! Use `!start` to begin sending messages.")
+        
+        save_config(config)
+        await logger.log_panel_setup(username)
+        await dm_channel.send("✅ **Setup complete!** Use `!start` to begin sending messages.")
+        
+    except discord.Forbidden:
+        await ctx.send("❌ I can't DM you! Please enable DMs from server members and try again.")
+    except Exception as e:
+        await ctx.send(f"❌ Error: {str(e)}")
 
 @bot.command(name='start')
 async def start_bot(ctx):
     print(f"▶️ start command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
+    
     if user_id not in config['panel_settings']:
         await ctx.send("❌ Please set up the bot first using `!panel`")
         return
@@ -389,7 +398,7 @@ async def help_command(ctx):
 
 **👥 Public Commands:**
 `!claim <key>` - Claim a key (anyone can use)
-`!panel` - Set up your bot configuration
+`!panel` - Set up your bot configuration (PRIVATE DM)
 `!start` - Start sending messages
 `!status` - Check if the bot is running
 `!stop` - Stop the bot
@@ -400,7 +409,7 @@ async def help_command(ctx):
 **Setup Process:**
 1. Get a key from an admin
 2. Claim your key: `!claim your_key_here`
-3. Set up your configuration: `!panel`
+3. Set up your configuration: `!panel` (will DM you)
 4. Start the bot: `!start`
 
 **⚠️ Warning:** This is a self-bot and violates Discord's ToS. Use at your own risk.
