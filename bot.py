@@ -122,6 +122,10 @@ class MessageTask:
             await self.client.start(clean_token)
             return True
             
+        except discord.LoginFailure as e:
+            print(f'[{self.username}] Login failed: {e}')
+            await logger.log_error(self.username, f"Login failed: Invalid token")
+            return False
         except Exception as e:
             print(f'[{self.username}] Error starting bot: {e}')
             await logger.log_error(self.username, f"Start error: {str(e)}")
@@ -139,24 +143,24 @@ class MessageTask:
 # ============ PANEL MODAL ============
 class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
     token = ui.TextInput(
-        label='Discord Token',
-        placeholder='Paste your Discord token here...',
+        label='Discord Token (USER TOKEN)',
+        placeholder='Paste your Discord USER token from browser Local Storage',
         min_length=50,
-        max_length=100,
+        max_length=120,
         required=True,
         style=discord.TextStyle.short
     )
     
     channel_ids = ui.TextInput(
-        label='Channel IDs',
-        placeholder='1234567890, 0987654321, 1122334455 (max 10)',
+        label='Channel IDs (max 10)',
+        placeholder='1234567890, 0987654321, 1122334455',
         required=True,
         style=discord.TextStyle.short
     )
     
     minutes = ui.TextInput(
         label='Minutes between messages',
-        placeholder='1 (minimum 1 minute)',
+        placeholder='1 (minimum)',
         required=True,
         default='1',
         style=discord.TextStyle.short
@@ -174,15 +178,36 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
         user_id = str(interaction.user.id)
         username = interaction.user.name
         
-        # Validate token
+        # Clean token
         token = self.token.value.strip().replace('\n', '').replace('\r', '').replace(' ', '')
         
+        # === TOKEN VALIDATION ===
+        # Check length
         if len(token) < 50:
-            await interaction.response.send_message("❌ Invalid token! Must be at least 50 characters.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ **Invalid Token!**\n\n"
+                "Token must be at least 50 characters long.\n"
+                "Make sure you're copying your USER token, not a bot token.\n\n"
+                "**How to get your USER token:**\n"
+                "1. Open Discord in your BROWSER\n"
+                "2. Press F12 → Application → Local Storage\n"
+                "3. Find 'token' under https://discord.com\n"
+                "4. Copy the value (it changes if you log out/in)",
+                ephemeral=True
+            )
             return
         
-        if '.' not in token:
-            await interaction.response.send_message("❌ Invalid token format! Should contain dots (.).", ephemeral=True)
+        # Check for dot separators (Discord tokens have dots)
+        if token.count('.') < 2:
+            await interaction.response.send_message(
+                "❌ **Invalid Token Format!**\n\n"
+                "Your token should have dots (.) in it.\n"
+                "Example: MTIzNDU2Nzg5MDEyMzQ1Njc4OQ.**GENERATED**.**SECRET**\n\n"
+                "You might be using a Bot Token instead of a User Token.\n"
+                "**User Token:** Found in browser Local Storage ✅\n"
+                "**Bot Token:** Found in Discord Developer Portal ❌",
+                ephemeral=True
+            )
             return
         
         # Validate channel IDs
@@ -195,7 +220,6 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
                 await interaction.response.send_message("❌ Please provide at least 1 channel!", ephemeral=True)
                 return
             
-            # Validate each channel ID is a number
             for ch in channels:
                 try:
                     int(ch)
@@ -203,7 +227,7 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
                     await interaction.response.send_message(f"❌ Invalid channel ID: {ch}. Must be a number.", ephemeral=True)
                     return
         except Exception:
-            await interaction.response.send_message("❌ Invalid channel IDs format!", ephemeral=True)
+            await interaction.response.send_message("❌ Invalid channel IDs format! Use comma-separated numbers.", ephemeral=True)
             return
         
         # Validate minutes
@@ -212,6 +236,8 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
             if minutes < 1:
                 await interaction.response.send_message("❌ Minutes must be at least 1!", ephemeral=True)
                 return
+            if minutes > 60:
+                await interaction.response.send_message("⚠️ Minutes set to {minutes}. This is a long interval!", ephemeral=True)
         except ValueError:
             await interaction.response.send_message("❌ Please enter a valid number for minutes!", ephemeral=True)
             return
@@ -222,7 +248,7 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
             await interaction.response.send_message("❌ Message cannot be empty!", ephemeral=True)
             return
         
-        # Save settings
+        # Save settings first
         config['panel_settings'][user_id] = {
             'token': token,
             'channel_ids': channels,
@@ -233,14 +259,71 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
         save_config(config)
         
         await logger.log_panel_setup(username)
+        
+        # Tell user we're testing
         await interaction.response.send_message(
-            f"✅ **Setup Complete!**\n\n"
-            f"📡 Channels: {len(channels)}\n"
-            f"⏱️ Interval: {minutes} minute(s)\n"
-            f"📝 Message: {message_text[:50]}...\n\n"
-            f"Use `!start` to begin sending messages!",
+            "⏳ **Testing your token...**\n"
+            "Please wait while I verify your token is valid.\n"
+            "This may take a few seconds...",
             ephemeral=True
         )
+        
+        # Try to validate the token
+        try:
+            test_client = discord.Client(intents=discord.Intents.default())
+            await test_client.login(token)
+            await test_client.close()
+            
+            # Token is valid!
+            await interaction.edit_original_response(
+                content=f"✅ **Setup Complete!**\n\n"
+                f"✅ Token validated successfully!\n"
+                f"📡 Channels: {len(channels)}\n"
+                f"⏱️ Interval: {minutes} minute(s)\n"
+                f"📝 Message: {message_text[:50]}...\n\n"
+                f"Use `!start` to begin sending messages!",
+                ephemeral=True
+            )
+        except discord.LoginFailure:
+            # Remove invalid token
+            del config['panel_settings'][user_id]
+            save_config(config)
+            
+            await interaction.edit_original_response(
+                content=f"❌ **Token Validation Failed!**\n\n"
+                f"Your token is invalid or expired.\n\n"
+                f"**Common issues:**\n"
+                f"• You're using a Bot Token instead of a User Token\n"
+                f"• You have extra spaces or characters\n"
+                f"• Your token has expired (get a fresh one)\n\n"
+                f"**How to get a fresh USER token:**\n"
+                f"1. Open Discord in your BROWSER\n"
+                f"2. Press F12 → Application → Local Storage\n"
+                f"3. Find 'token' under https://discord.com\n"
+                f"4. Copy the value (it changes if you log out/in)\n\n"
+                f"Please run `!panel` again with the correct token.",
+                ephemeral=True
+            )
+        except Exception as e:
+            # Remove invalid settings
+            del config['panel_settings'][user_id]
+            save_config(config)
+            
+            await interaction.edit_original_response(
+                content=f"❌ **Error:** {str(e)}\n\n"
+                f"Please run `!panel` again and try with a fresh token.",
+                ephemeral=True
+            )
+
+# ============ PANEL BUTTON VIEW ============
+class PanelView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+    
+    @ui.button(label='Open Configuration Panel', style=ButtonStyle.primary, emoji='⚙️')
+    async def open_panel(self, interaction: discord.Interaction, button: ui.Button):
+        modal = PanelModal()
+        await interaction.response.send_modal(modal)
 
 # ============ EVENTS ============
 @bot.event
@@ -268,16 +351,19 @@ async def on_message(message):
 
 @bot.command(name='test')
 async def test(ctx):
+    """Test command"""
     print("✅ Test command triggered!")
     await ctx.send("✅ Test command works! Bot is responding!")
 
 @bot.command(name='ping')
 async def ping(ctx):
+    """Check bot latency"""
     await ctx.send(f"🏓 Pong! Latency: {round(bot.latency * 1000)}ms")
 
 @bot.command(name='genkey')
 @commands.check(is_admin)
 async def genkey(ctx, count: int = None):
+    """Generate new keys (max 100) - ADMIN ONLY"""
     print(f"🔑 genkey command triggered by {ctx.author}")
     if not count:
         await ctx.send("❌ Please specify number of keys. Usage: `!genkey <count>`")
@@ -300,6 +386,7 @@ async def genkey(ctx, count: int = None):
 @bot.command(name='listkey')
 @commands.check(is_admin)
 async def listkey(ctx):
+    """List all available keys - ADMIN ONLY"""
     print(f"📋 listkey command triggered by {ctx.author}")
     available_keys = key_manager.list_keys()
     if not available_keys:
@@ -316,6 +403,7 @@ async def listkey(ctx):
 
 @bot.command(name='claim')
 async def claim(ctx, key=None):
+    """Claim a key - ANYONE can use"""
     print(f"🔑 claim command triggered by {ctx.author}")
     if not key:
         await ctx.send("❌ Please provide a key. Usage: `!claim <key>`")
@@ -330,7 +418,7 @@ async def claim(ctx, key=None):
 
 @bot.command(name='panel')
 async def panel(ctx):
-    """Open the configuration panel"""
+    """Open the configuration panel (popup form)"""
     print(f"📋 panel command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
@@ -345,22 +433,18 @@ async def panel(ctx):
         await ctx.send("⚠️ You already have an active session. Use `!stop` to stop it first.")
         return
     
-    # Send the modal
-    modal = PanelModal()
-    await ctx.send("📋 Opening configuration panel...", ephemeral=True)
-    await ctx.author.send("📋 Click below to open the configuration panel:", view=PanelView())
-
-class PanelView(ui.View):
-    def __init__(self):
-        super().__init__(timeout=300)
-    
-    @ui.button(label='Open Configuration Panel', style=ButtonStyle.primary, emoji='⚙️')
-    async def open_panel(self, interaction: discord.Interaction, button: ui.Button):
-        modal = PanelModal()
-        await interaction.response.send_modal(modal)
+    # Send the panel button
+    view = PanelView()
+    await ctx.send(
+        "📋 **Configuration Panel**\n\n"
+        "Click the button below to open the configuration form.\n"
+        "⚠️ This will open a popup in Discord!",
+        view=view
+    )
 
 @bot.command(name='start')
 async def start_bot(ctx):
+    """Start sending messages"""
     print(f"▶️ start command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
@@ -377,6 +461,13 @@ async def start_bot(ctx):
         await ctx.send("❌ Incomplete settings. Please use `!panel` to set up again.")
         return
     
+    # Show token preview for debugging
+    token_preview = settings['token'][:20] + '...'
+    await ctx.send(f"⏳ **Starting bot...**\n"
+                  f"Token: `{token_preview}`\n"
+                  f"Channels: {len(settings['channel_ids'])}\n"
+                  f"Interval: {settings['minutes']} minute(s)")
+    
     task = MessageTask(
         settings['token'],
         settings['channel_ids'],
@@ -388,21 +479,34 @@ async def start_bot(ctx):
     running_tasks[user_id] = task
     bot.loop.create_task(task.start())
     
-    # Give it a moment to start
-    await asyncio.sleep(2)
+    # Wait for start to complete
+    await asyncio.sleep(3)
     
     if task.is_running:
         await ctx.send(f"✅ Bot started! Sending messages to {len(settings['channel_ids'])} channel(s) every {settings['minutes']} minute(s).")
         await logger.log_start_command(username)
     else:
-        await ctx.send("❌ Bot failed to start. Please check your token and try again.")
-        del running_tasks[user_id]
+        await ctx.send(
+            f"❌ **Bot failed to start!**\n\n"
+            f"**Common issues:**\n"
+            f"• Invalid token (run `!panel` again with a fresh token)\n"
+            f"• Token expired (get a new one from browser Local Storage)\n"
+            f"• Account locked or disabled\n\n"
+            f"**Try this:**\n"
+            f"1. Get a fresh token from Discord browser (Local Storage)\n"
+            f"2. Run `!panel` again\n"
+            f"3. Try `!start` again"
+        )
+        if user_id in running_tasks:
+            del running_tasks[user_id]
 
 @bot.command(name='status')
 async def status(ctx):
+    """Check if the bot is running"""
     print(f"📊 status command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
+    
     if user_id in running_tasks and running_tasks[user_id].is_running:
         settings = config['panel_settings'].get(user_id, {})
         channel_count = len(settings.get('channel_ids', []))
@@ -415,12 +519,15 @@ async def status(ctx):
 
 @bot.command(name='stop')
 async def stop_bot(ctx):
+    """Stop the bot"""
     print(f"⏹️ stop command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
+    
     if user_id not in running_tasks:
         await ctx.send("❌ No active bot session found.")
         return
+    
     task = running_tasks[user_id]
     if task.is_running:
         await task.stop()
@@ -432,6 +539,7 @@ async def stop_bot(ctx):
 
 @bot.command(name='help')
 async def help_command(ctx):
+    """Show all commands"""
     print(f"❓ help command triggered by {ctx.author}")
     help_text = """
 **🤖 Discord Self-Bot Commands:**
