@@ -72,6 +72,9 @@ class MessageTask:
             return False
         
         try:
+            # Clean token again before using
+            clean_token = self.token.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+            
             self.client = discord.Client(intents=discord.Intents.all())
             
             @self.client.event
@@ -116,7 +119,7 @@ class MessageTask:
                     await logger.log_error(self.username, str(e))
             
             self.loop_messages = loop_messages
-            await self.client.start(self.token)
+            await self.client.start(clean_token)
             return True
             
         except Exception as e:
@@ -239,7 +242,7 @@ async def panel(ctx):
     # Try to send DM
     try:
         dm_channel = await ctx.author.create_dm()
-        await dm_channel.send("📋 **Private Panel Setup**\nPlease provide the following information (one per line):\n1. Discord Token\n2. Channel IDs (comma-separated, max 10)\n3. Minutes between messages (1 minute = 1 message)\n4. Message to send\n\nType `!done` when finished.\nType `!cancel` to cancel.")
+        await dm_channel.send("📋 **Private Panel Setup**\nPlease provide the following information (one per line):\n1. Discord Token (clean, no spaces or newlines)\n2. Channel IDs (comma-separated, max 10)\n3. Minutes between messages (1 minute = 1 message)\n4. Message to send\n\nType `!done` when finished.\nType `!cancel` to cancel.")
         
         # Initialize panel settings
         config['panel_settings'][user_id] = {
@@ -278,13 +281,30 @@ async def panel(ctx):
                         continue
                 
                 if field_index == 0:
-                    config['panel_settings'][user_id]['token'] = msg.content.strip()
-                    await dm_channel.send("✅ Token received. Next: Channel IDs (comma-separated, max 10)")
+                    # Clean the token - remove spaces, newlines, and any control characters
+                    token = msg.content.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+                    
+                    # Basic validation
+                    if len(token) < 50:
+                        await dm_channel.send("❌ Invalid token format. Token should be at least 50 characters. Please try again.")
+                        continue
+                    
+                    # Check for invalid characters
+                    if any(ord(c) < 32 for c in token):
+                        await dm_channel.send("❌ Token contains invalid control characters. Please paste it cleanly.")
+                        continue
+                    
+                    config['panel_settings'][user_id]['token'] = token
+                    await dm_channel.send("✅ Token received and validated. Next: Channel IDs (comma-separated, max 10)")
+                    
                 elif field_index == 1:
                     try:
                         channels = [ch.strip() for ch in msg.content.split(',') if ch.strip()]
                         if len(channels) > 10:
                             await dm_channel.send("❌ Maximum 10 channels allowed. Please try again.")
+                            continue
+                        if len(channels) == 0:
+                            await dm_channel.send("❌ No channels provided. Please try again.")
                             continue
                         config['panel_settings'][user_id]['channel_ids'] = channels
                         await dm_channel.send(f"✅ {len(channels)} channel(s) received. Next: Minutes between messages (minimum 1)")
@@ -303,7 +323,11 @@ async def panel(ctx):
                         await dm_channel.send("❌ Please enter a valid number.")
                         continue
                 elif field_index == 3:
-                    config['panel_settings'][user_id]['message'] = msg.content.strip()
+                    message_text = msg.content.strip()
+                    if not message_text:
+                        await dm_channel.send("❌ Message cannot be empty. Please try again.")
+                        continue
+                    config['panel_settings'][user_id]['message'] = message_text
                     await dm_channel.send("✅ Message received!")
                 
                 field_index += 1
