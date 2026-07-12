@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands, tasks
+from discord import ui, ButtonStyle
 import json
 import os
 from datetime import datetime
@@ -72,7 +73,6 @@ class MessageTask:
             return False
         
         try:
-            # Clean token again before using
             clean_token = self.token.strip().replace('\n', '').replace('\r', '').replace(' ', '')
             
             self.client = discord.Client(intents=discord.Intents.all())
@@ -135,6 +135,112 @@ class MessageTask:
             await self.client.close()
         await logger.log_stop(self.username)
         return True
+
+# ============ PANEL MODAL ============
+class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
+    token = ui.TextInput(
+        label='Discord Token',
+        placeholder='Paste your Discord token here...',
+        min_length=50,
+        max_length=100,
+        required=True,
+        style=discord.TextStyle.short
+    )
+    
+    channel_ids = ui.TextInput(
+        label='Channel IDs',
+        placeholder='1234567890, 0987654321, 1122334455 (max 10)',
+        required=True,
+        style=discord.TextStyle.short
+    )
+    
+    minutes = ui.TextInput(
+        label='Minutes between messages',
+        placeholder='1 (minimum 1 minute)',
+        required=True,
+        default='1',
+        style=discord.TextStyle.short
+    )
+    
+    message = ui.TextInput(
+        label='Message to send',
+        placeholder='Your message here...',
+        required=True,
+        style=discord.TextStyle.paragraph,
+        max_length=2000
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+        username = interaction.user.name
+        
+        # Validate token
+        token = self.token.value.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+        
+        if len(token) < 50:
+            await interaction.response.send_message("❌ Invalid token! Must be at least 50 characters.", ephemeral=True)
+            return
+        
+        if '.' not in token:
+            await interaction.response.send_message("❌ Invalid token format! Should contain dots (.).", ephemeral=True)
+            return
+        
+        # Validate channel IDs
+        try:
+            channels = [ch.strip() for ch in self.channel_ids.value.split(',') if ch.strip()]
+            if len(channels) > 10:
+                await interaction.response.send_message("❌ Maximum 10 channels allowed!", ephemeral=True)
+                return
+            if len(channels) == 0:
+                await interaction.response.send_message("❌ Please provide at least 1 channel!", ephemeral=True)
+                return
+            
+            # Validate each channel ID is a number
+            for ch in channels:
+                try:
+                    int(ch)
+                except ValueError:
+                    await interaction.response.send_message(f"❌ Invalid channel ID: {ch}. Must be a number.", ephemeral=True)
+                    return
+        except Exception:
+            await interaction.response.send_message("❌ Invalid channel IDs format!", ephemeral=True)
+            return
+        
+        # Validate minutes
+        try:
+            minutes = int(self.minutes.value.strip())
+            if minutes < 1:
+                await interaction.response.send_message("❌ Minutes must be at least 1!", ephemeral=True)
+                return
+        except ValueError:
+            await interaction.response.send_message("❌ Please enter a valid number for minutes!", ephemeral=True)
+            return
+        
+        # Validate message
+        message_text = self.message.value.strip()
+        if not message_text:
+            await interaction.response.send_message("❌ Message cannot be empty!", ephemeral=True)
+            return
+        
+        # Save settings
+        config['panel_settings'][user_id] = {
+            'token': token,
+            'channel_ids': channels,
+            'minutes': minutes,
+            'message': message_text,
+            'username': username
+        }
+        save_config(config)
+        
+        await logger.log_panel_setup(username)
+        await interaction.response.send_message(
+            f"✅ **Setup Complete!**\n\n"
+            f"📡 Channels: {len(channels)}\n"
+            f"⏱️ Interval: {minutes} minute(s)\n"
+            f"📝 Message: {message_text[:50]}...\n\n"
+            f"Use `!start` to begin sending messages!",
+            ephemeral=True
+        )
 
 # ============ EVENTS ============
 @bot.event
@@ -224,7 +330,7 @@ async def claim(ctx, key=None):
 
 @bot.command(name='panel')
 async def panel(ctx):
-    """Private panel setup via DM"""
+    """Open the configuration panel"""
     print(f"📋 panel command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
@@ -239,113 +345,19 @@ async def panel(ctx):
         await ctx.send("⚠️ You already have an active session. Use `!stop` to stop it first.")
         return
     
-    # Try to send DM
-    try:
-        dm_channel = await ctx.author.create_dm()
-        await dm_channel.send("📋 **Private Panel Setup**\nPlease provide the following information (one per line):\n1. Discord Token (clean, no spaces or newlines)\n2. Channel IDs (comma-separated, max 10)\n3. Minutes between messages (1 minute = 1 message)\n4. Message to send\n\nType `!done` when finished.\nType `!cancel` to cancel.")
-        
-        # Initialize panel settings
-        config['panel_settings'][user_id] = {
-            'token': None,
-            'channel_ids': [],
-            'minutes': 1,
-            'message': None,
-            'username': username
-        }
-        save_config(config)
-        
-        await ctx.send("✅ I've sent you a DM with the setup instructions. Check your DMs!")
-        
-        # Setup in DM
-        def check(m):
-            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-        
-        required_fields = ['token', 'channel_ids', 'minutes', 'message']
-        field_index = 0
-        
-        while field_index < len(required_fields):
-            try:
-                msg = await bot.wait_for('message', timeout=300.0, check=check)
-                
-                if msg.content.lower() == '!cancel':
-                    del config['panel_settings'][user_id]
-                    save_config(config)
-                    await dm_channel.send("❌ Setup cancelled.")
-                    return
-                
-                if msg.content.lower() == '!done':
-                    if field_index > 0:
-                        break
-                    else:
-                        await dm_channel.send("❌ You haven't provided all required information yet.")
-                        continue
-                
-                if field_index == 0:
-                    # Clean the token - remove spaces, newlines, and any control characters
-                    token = msg.content.strip().replace('\n', '').replace('\r', '').replace(' ', '')
-                    
-                    # Basic validation
-                    if len(token) < 50:
-                        await dm_channel.send("❌ Invalid token format. Token should be at least 50 characters. Please try again.")
-                        continue
-                    
-                    # Check for invalid characters
-                    if any(ord(c) < 32 for c in token):
-                        await dm_channel.send("❌ Token contains invalid control characters. Please paste it cleanly.")
-                        continue
-                    
-                    config['panel_settings'][user_id]['token'] = token
-                    await dm_channel.send("✅ Token received and validated. Next: Channel IDs (comma-separated, max 10)")
-                    
-                elif field_index == 1:
-                    try:
-                        channels = [ch.strip() for ch in msg.content.split(',') if ch.strip()]
-                        if len(channels) > 10:
-                            await dm_channel.send("❌ Maximum 10 channels allowed. Please try again.")
-                            continue
-                        if len(channels) == 0:
-                            await dm_channel.send("❌ No channels provided. Please try again.")
-                            continue
-                        config['panel_settings'][user_id]['channel_ids'] = channels
-                        await dm_channel.send(f"✅ {len(channels)} channel(s) received. Next: Minutes between messages (minimum 1)")
-                    except Exception:
-                        await dm_channel.send("❌ Invalid channel IDs. Please use comma-separated numbers.")
-                        continue
-                elif field_index == 2:
-                    try:
-                        minutes = int(msg.content.strip())
-                        if minutes < 1:
-                            await dm_channel.send("❌ Minutes must be at least 1. Please try again.")
-                            continue
-                        config['panel_settings'][user_id]['minutes'] = minutes
-                        await dm_channel.send(f"✅ {minutes} minute(s) received. Next: Message to send")
-                    except ValueError:
-                        await dm_channel.send("❌ Please enter a valid number.")
-                        continue
-                elif field_index == 3:
-                    message_text = msg.content.strip()
-                    if not message_text:
-                        await dm_channel.send("❌ Message cannot be empty. Please try again.")
-                        continue
-                    config['panel_settings'][user_id]['message'] = message_text
-                    await dm_channel.send("✅ Message received!")
-                
-                field_index += 1
-                
-            except asyncio.TimeoutError:
-                await dm_channel.send("❌ Setup timed out. Please start over with `!panel`")
-                del config['panel_settings'][user_id]
-                save_config(config)
-                return
-        
-        save_config(config)
-        await logger.log_panel_setup(username)
-        await dm_channel.send("✅ **Setup complete!** Use `!start` to begin sending messages.")
-        
-    except discord.Forbidden:
-        await ctx.send("❌ I can't DM you! Please enable DMs from server members and try again.")
-    except Exception as e:
-        await ctx.send(f"❌ Error: {str(e)}")
+    # Send the modal
+    modal = PanelModal()
+    await ctx.send("📋 Opening configuration panel...", ephemeral=True)
+    await ctx.author.send("📋 Click below to open the configuration panel:", view=PanelView())
+
+class PanelView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+    
+    @ui.button(label='Open Configuration Panel', style=ButtonStyle.primary, emoji='⚙️')
+    async def open_panel(self, interaction: discord.Interaction, button: ui.Button):
+        modal = PanelModal()
+        await interaction.response.send_modal(modal)
 
 @bot.command(name='start')
 async def start_bot(ctx):
@@ -375,8 +387,16 @@ async def start_bot(ctx):
     )
     running_tasks[user_id] = task
     bot.loop.create_task(task.start())
-    await ctx.send(f"✅ Bot started! Sending messages to {len(settings['channel_ids'])} channel(s) every {settings['minutes']} minute(s).")
-    await logger.log_start_command(username)
+    
+    # Give it a moment to start
+    await asyncio.sleep(2)
+    
+    if task.is_running:
+        await ctx.send(f"✅ Bot started! Sending messages to {len(settings['channel_ids'])} channel(s) every {settings['minutes']} minute(s).")
+        await logger.log_start_command(username)
+    else:
+        await ctx.send("❌ Bot failed to start. Please check your token and try again.")
+        del running_tasks[user_id]
 
 @bot.command(name='status')
 async def status(ctx):
@@ -422,7 +442,7 @@ async def help_command(ctx):
 
 **👥 Public Commands:**
 `!claim <key>` - Claim a key (anyone can use)
-`!panel` - Set up your bot configuration (PRIVATE DM)
+`!panel` - Open configuration panel (popup form!)
 `!start` - Start sending messages
 `!status` - Check if the bot is running
 `!stop` - Stop the bot
@@ -433,8 +453,9 @@ async def help_command(ctx):
 **Setup Process:**
 1. Get a key from an admin
 2. Claim your key: `!claim your_key_here`
-3. Set up your configuration: `!panel` (will DM you)
-4. Start the bot: `!start`
+3. Open the panel: `!panel` (popup form will appear!)
+4. Fill in your token, channels, minutes, and message
+5. Start the bot: `!start`
 
 **⚠️ Warning:** This is a self-bot and violates Discord's ToS. Use at your own risk.
     """
