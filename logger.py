@@ -76,3 +76,8 @@ class Logger:
     async def log_list_keys(self, username):
         """Log list keys command"""
         await self.send_log(f"**List Keys** - User: `{username}` listed available keys", "info")
+    
+    async def log_bypass(self, username, state):
+        """Log bypass toggle"""
+        status = "ON" if state else "OFF"
+        await self.send_log(f"**Bypass** - User: `{username}` turned bypass {status}", "info")
