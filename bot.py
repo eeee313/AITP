@@ -45,8 +45,9 @@ logger = Logger(LOG_CHANNEL_ID)
 # ============ BOT SETUP ============
 intents = discord.Intents.all()
 
+# CHANGE THIS PREFIX TO WHATEVER YOU WANT (e.g., '$')
 bot = commands.Bot(
-    command_prefix='!',
+    command_prefix='!',   # <--- set to '!' for all commands
     self_bot=True, 
     help_command=None, 
     intents=intents
@@ -90,24 +91,27 @@ class MessageTask:
             @self.client.event
             async def on_message(message):
                 if message.author == self.client.user:
-                    if message.content.startswith('!status'):
+                    # Only handle commands if they match the main bot's prefix
+                    # We'll just handle status/stop/start inside the task for convenience
+                    content = message.content
+                    if content.startswith('!status'):   # hardcoded ! for task commands
                         await message.channel.send(f"🟢 Bot is running. Sending messages every {self.minutes} minute(s).")
-                    elif message.content.startswith('!stop'):
+                    elif content.startswith('!stop'):
                         await self.stop()
                         await message.channel.send("🛑 Bot stopped.")
-                    elif message.content.startswith('!start'):
+                    elif content.startswith('!start'):
                         if not self.is_running:
                             await self.start()
                             await message.channel.send("✅ Bot started.")
                         else:
                             await message.channel.send("⚠️ Bot is already running.")
-                    elif message.content.startswith('!bypasson'):
+                    elif content.startswith('!bypasson'):
                         self.bypass_mode = True
                         config['panel_settings'][self.user_id]['bypass'] = True
                         save_config(config)
                         await message.channel.send("🔄 Bypass mode **ON** – delays and jitter added.")
                         await logger.log_bypass(self.username, True)
-                    elif message.content.startswith('!bypassoff'):
+                    elif content.startswith('!bypassoff'):
                         self.bypass_mode = False
                         config['panel_settings'][self.user_id]['bypass'] = False
                         save_config(config)
@@ -119,17 +123,9 @@ class MessageTask:
                 if not self.is_running:
                     return
                 try:
-                    # If bypass is on, add jitter to the interval (send earlier or later)
-                    if self.bypass_mode:
-                        jitter = random.uniform(-0.5, 0.5)  # -30s to +30s
-                        # We can't easily change the loop interval, so we'll just wait extra before sending
-                        # But we'll implement delay per message inside the loop.
-                        pass
-
                     for channel_id in self.channel_ids:
                         channel = self.client.get_channel(int(channel_id))
                         if channel:
-                            # SEND WITH BYPASS HANDLING
                             await self._send_with_bypass(channel)
                         else:
                             print(f'[{self.username}] Channel {channel_id} not found')
@@ -157,9 +153,8 @@ class MessageTask:
         retries = 0
         while retries < MAX_RETRIES:
             try:
-                # Before sending, if bypass is on, add a random delay (5-15s) between messages
+                # If bypass is ON, add a random delay (5-15s) before sending
                 if self.bypass_mode:
-                    # Also add a small random sleep to simulate human typing
                     await asyncio.sleep(random.uniform(5, 15))
                 
                 await channel.send(self.message)
@@ -167,7 +162,7 @@ class MessageTask:
                 await logger.log_message_sent(self.username, channel.id, self.message[:50])
                 break  # success, exit loop
             except discord.HTTPException as e:
-                # Check if it's a rate limit (status 429)
+                # Rate limit (429) detection
                 if e.status == 429:
                     retry_after = e.retry_after if hasattr(e, 'retry_after') else 5
                     print(f'[{self.username}] Rate limited! Retry after {retry_after}s')
@@ -175,7 +170,6 @@ class MessageTask:
                     await asyncio.sleep(retry_after)
                     retries += 1
                 else:
-                    # Other HTTP errors
                     print(f'[{self.username}] HTTP error: {e}')
                     await logger.log_error(self.username, f"HTTP error: {str(e)}")
                     break
@@ -237,7 +231,6 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
         token = self.token.value.strip().replace('\n', '').replace('\r', '').replace(' ', '')
         
         # === TOKEN VALIDATION ===
-        # Check length
         if len(token) < 50:
             await interaction.response.send_message(
                 "❌ **Invalid Token!**\n\n"
@@ -252,7 +245,6 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
             )
             return
         
-        # Check for dot separators (Discord tokens have dots)
         if token.count('.') < 2:
             await interaction.response.send_message(
                 "❌ **Invalid Token Format!**\n\n"
@@ -303,7 +295,7 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
             await interaction.response.send_message("❌ Message cannot be empty!", ephemeral=True)
             return
         
-        # Save settings first (preserve existing bypass if any)
+        # Save settings (preserve existing bypass flag)
         existing_bypass = config.get('panel_settings', {}).get(user_id, {}).get('bypass', False)
         config['panel_settings'][user_id] = {
             'token': token,
@@ -317,7 +309,7 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
         
         await logger.log_panel_setup(username)
         
-        # Tell user we're testing
+        # Test token
         await interaction.response.send_message(
             "⏳ **Testing your token...**\n"
             "Please wait while I verify your token is valid.\n"
@@ -325,28 +317,24 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
             ephemeral=True
         )
         
-        # Try to validate the token
         try:
             test_client = discord.Client(intents=discord.Intents.default())
             await test_client.login(token)
             await test_client.close()
             
-            # Token is valid!
             await interaction.edit_original_response(
                 content=f"✅ **Setup Complete!**\n\n"
                 f"✅ Token validated successfully!\n"
                 f"📡 Channels: {len(channels)}\n"
                 f"⏱️ Interval: {minutes} minute(s)\n"
                 f"📝 Message: {message_text[:50]}...\n\n"
-                f"Use `!start` to begin sending messages!\n"
-                f"Toggle bypass with `!bypasson` / `!bypassoff`",
+                f"Use `{bot.command_prefix}start` to begin sending messages!\n"
+                f"Toggle bypass with `{bot.command_prefix}bypasson` / `{bot.command_prefix}bypassoff`",
                 ephemeral=True
             )
         except discord.LoginFailure:
-            # Remove invalid token
             del config['panel_settings'][user_id]
             save_config(config)
-            
             await interaction.edit_original_response(
                 content=f"❌ **Token Validation Failed!**\n\n"
                 f"Your token is invalid or expired.\n\n"
@@ -359,17 +347,15 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
                 f"2. Press F12 → Application → Local Storage\n"
                 f"3. Find 'token' under https://discord.com\n"
                 f"4. Copy the value (it changes if you log out/in)\n\n"
-                f"Please run `!panel` again with the correct token.",
+                f"Please run `{bot.command_prefix}panel` again with the correct token.",
                 ephemeral=True
             )
         except Exception as e:
-            # Remove invalid settings
             del config['panel_settings'][user_id]
             save_config(config)
-            
             await interaction.edit_original_response(
                 content=f"❌ **Error:** {str(e)}\n\n"
-                f"Please run `!panel` again and try with a fresh token.",
+                f"Please run `{bot.command_prefix}panel` again and try with a fresh token.",
                 ephemeral=True
             )
 
@@ -390,49 +376,34 @@ async def on_ready():
     print(f'✅ Bot ID: {bot.user.id}')
     print(f'✅ Connected to {len(bot.guilds)} servers')
     print(f'✅ Bot is ready to receive commands!')
-    print(f'📝 Command prefix: !')
+    print(f'📝 Command prefix: {bot.command_prefix}')
 
 @bot.event
 async def on_message(message):
-    print(f"📨 Message: '{message.content}' from {message.author}")
-    
     if message.author == bot.user:
-        print("⏭️ Skipping bot's own message")
         return
-    
-    if message.content.startswith('!'):
-        print(f"🔍 Processing command: {message.content}")
-    
-    await bot.process_commands(message)
+    if message.content.startswith(bot.command_prefix):
+        await bot.process_commands(message)
 
 # ============ COMMANDS ============
 
 @bot.command(name='test')
 async def test(ctx):
-    """Test command"""
-    print("✅ Test command triggered!")
     await ctx.send("✅ Test command works! Bot is responding!")
 
 @bot.command(name='ping')
 async def ping(ctx):
-    """Check bot latency"""
     await ctx.send(f"🏓 Pong! Latency: {round(bot.latency * 1000)}ms")
 
 @bot.command(name='genkey')
 @commands.check(is_admin)
 async def genkey(ctx, count: int = None):
-    """Generate new keys (max 100) - ADMIN ONLY"""
-    print(f"🔑 genkey command triggered by {ctx.author}")
     if not count:
         await ctx.send("❌ Please specify number of keys. Usage: `!genkey <count>`")
         return
-    if count < 1:
-        await ctx.send("❌ Count must be at least 1.")
+    if count < 1 or count > 100:
+        await ctx.send("❌ Count must be between 1 and 100.")
         return
-    if count > 100:
-        await ctx.send("❌ Maximum 100 keys per generation.")
-        return
-    
     keys = key_manager.generate_keys(count)
     if keys:
         key_list = '\n'.join(keys)
@@ -444,8 +415,6 @@ async def genkey(ctx, count: int = None):
 @bot.command(name='listkey')
 @commands.check(is_admin)
 async def listkey(ctx):
-    """List all available keys - ADMIN ONLY"""
-    print(f"📋 listkey command triggered by {ctx.author}")
     available_keys = key_manager.list_keys()
     if not available_keys:
         await ctx.send("📭 No available keys.")
@@ -453,45 +422,31 @@ async def listkey(ctx):
     display_keys = available_keys[:10]
     key_list = '\n'.join(display_keys)
     total = len(available_keys)
-    if total > 10:
-        await ctx.send(f"📋 Available keys ({total} total, showing first 10):\n```\n{key_list}\n```")
-    else:
-        await ctx.send(f"📋 Available keys ({total} total):\n```\n{key_list}\n```")
+    await ctx.send(f"📋 Available keys ({total} total, showing first 10):\n```\n{key_list}\n```")
     await logger.log_list_keys(ctx.author.name)
 
 @bot.command(name='claim')
 async def claim(ctx, key=None):
-    """Claim a key - ANYONE can use"""
-    print(f"🔑 claim command triggered by {ctx.author}")
     if not key:
         await ctx.send("❌ Please provide a key. Usage: `!claim <key>`")
         return
     user_id = str(ctx.author.id)
     username = ctx.author.name
     if key_manager.claim_key(key, user_id, username):
-        await ctx.send(f"✅ Key claimed successfully! Use `!panel` to set up your bot.")
+        await ctx.send(f"✅ Key claimed successfully! Use `{bot.command_prefix}panel` to set up your bot.")
         await logger.log_key_claim(username, key)
     else:
         await ctx.send("❌ Invalid or already claimed key.")
 
 @bot.command(name='panel')
 async def panel(ctx):
-    """Open the configuration panel (popup form)"""
-    print(f"📋 panel command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
-    username = ctx.author.name
-    
-    # Check if user has a key
-    has_key = key_manager.has_claimed_key(user_id)
-    if not has_key:
+    if not key_manager.has_claimed_key(user_id):
         await ctx.send("❌ You need to claim a key first using `!claim <key>`")
         return
-    
     if user_id in config['active_sessions']:
         await ctx.send("⚠️ You already have an active session. Use `!stop` to stop it first.")
         return
-    
-    # Send the panel button
     view = PanelView()
     await ctx.send(
         "📋 **Configuration Panel**\n\n"
@@ -502,24 +457,19 @@ async def panel(ctx):
 
 @bot.command(name='start')
 async def start_bot(ctx):
-    """Start sending messages"""
-    print(f"▶️ start command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
     username = ctx.author.name
-    
     if user_id not in config['panel_settings']:
         await ctx.send("❌ Please set up the bot first using `!panel`")
         return
     if user_id in running_tasks and running_tasks[user_id].is_running:
         await ctx.send("⚠️ Bot is already running.")
         return
-    
     settings = config['panel_settings'][user_id]
     if not all([settings['token'], settings['channel_ids'], settings['message']]):
         await ctx.send("❌ Incomplete settings. Please use `!panel` to set up again.")
         return
     
-    # Show token preview for debugging
     token_preview = settings['token'][:20] + '...'
     await ctx.send(f"⏳ **Starting bot...**\n"
                   f"Token: `{token_preview}`\n"
@@ -537,10 +487,7 @@ async def start_bot(ctx):
     )
     running_tasks[user_id] = task
     bot.loop.create_task(task.start())
-    
-    # Wait for start to complete
     await asyncio.sleep(3)
-    
     if task.is_running:
         await ctx.send(f"✅ Bot started! Sending messages to {len(settings['channel_ids'])} channel(s) every {settings['minutes']} minute(s).")
         await logger.log_start_command(username)
@@ -549,72 +496,61 @@ async def start_bot(ctx):
             f"❌ **Bot failed to start!**\n\n"
             f"**Common issues:**\n"
             f"• Invalid token (run `!panel` again with a fresh token)\n"
-            f"• Token expired (get a new one from browser Local Storage)\n"
-            f"• Account locked or disabled\n\n"
-            f"**Try this:**\n"
-            f"1. Get a fresh token from Discord browser (Local Storage)\n"
-            f"2. Run `!panel` again\n"
-            f"3. Try `!start` again"
+            f"• Token expired\n"
+            f"• Account locked\n\n"
+            f"Try: 1) Get fresh token  2) Run `!panel`  3) `!start` again"
         )
         if user_id in running_tasks:
             del running_tasks[user_id]
 
 @bot.command(name='status')
 async def status(ctx):
-    """Check if the bot is running"""
-    print(f"📊 status command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
-    username = ctx.author.name
-    
     if user_id in running_tasks and running_tasks[user_id].is_running:
         settings = config['panel_settings'].get(user_id, {})
         channel_count = len(settings.get('channel_ids', []))
         minutes = settings.get('minutes', 1)
         bypass = "ON" if settings.get('bypass', False) else "OFF"
         await ctx.send(f"🟢 **Bot Status**: Running\n📡 Channels: {channel_count}\n⏱️ Interval: {minutes} minute(s)\n🔄 Bypass: {bypass}")
-        await logger.log_status_check(username, True)
+        await logger.log_status_check(ctx.author.name, True)
     else:
         await ctx.send("🔴 **Bot Status**: Not running")
-        await logger.log_status_check(username, False)
+        await logger.log_status_check(ctx.author.name, False)
 
 @bot.command(name='stop')
 async def stop_bot(ctx):
-    """Stop the bot"""
-    print(f"⏹️ stop command triggered by {ctx.author}")
     user_id = str(ctx.author.id)
-    username = ctx.author.name
-    
     if user_id not in running_tasks:
         await ctx.send("❌ No active bot session found.")
         return
-    
     task = running_tasks[user_id]
     if task.is_running:
         await task.stop()
         del running_tasks[user_id]
         await ctx.send("🛑 Bot stopped successfully!")
-        await logger.log_stop_command(username)
+        await logger.log_stop_command(ctx.author.name)
     else:
         await ctx.send("❌ Bot is not running.")
 
+# Notice: bypasson and bypassoff are already handled inside the MessageTask's on_message
+# But we also want them available as global commands for when the bot is not running?
+# Actually, the user can only toggle bypass when the bot is running (since the task handles it).
+# If they want to toggle bypass without starting, they can use the global commands:
 @bot.command(name='bypasson')
-async def bypasson(ctx):
-    """Turn bypass mode ON (adds delays and jitter to avoid rate limits)"""
+async def bypasson_global(ctx):
     user_id = str(ctx.author.id)
     if user_id not in config['panel_settings']:
         await ctx.send("❌ Please set up the bot first using `!panel`")
         return
     config['panel_settings'][user_id]['bypass'] = True
     save_config(config)
-    # If bot is currently running, update the task's bypass_mode
     if user_id in running_tasks:
         running_tasks[user_id].bypass_mode = True
-    await ctx.send("🔄 Bypass mode is now **ON** – messages will be sent with random delays and jitter.")
+    await ctx.send("🔄 Bypass mode is now **ON** – delays and retry logic active.")
     await logger.log_bypass(ctx.author.name, True)
 
 @bot.command(name='bypassoff')
-async def bypassoff(ctx):
-    """Turn bypass mode OFF (normal speed)"""
+async def bypassoff_global(ctx):
     user_id = str(ctx.author.id)
     if user_id not in config['panel_settings']:
         await ctx.send("❌ Please set up the bot first using `!panel`")
@@ -628,47 +564,42 @@ async def bypassoff(ctx):
 
 @bot.command(name='help')
 async def help_command(ctx):
-    """Show all commands"""
-    print(f"❓ help command triggered by {ctx.author}")
-    help_text = """
+    help_text = f"""
 **🤖 Discord Self-Bot Commands:**
 
 **🔒 Admin Only:**
-`!genkey <count>` - Generate new keys (max 100)
-`!listkey` - List all available keys
+`{bot.command_prefix}genkey <count>` - Generate keys (max 100)
+`{bot.command_prefix}listkey` - List available keys
 
-**👥 Public Commands:**
-`!claim <key>` - Claim a key (anyone can use)
-`!panel` - Open configuration panel (popup form!)
-`!start` - Start sending messages
-`!status` - Check if the bot is running
-`!stop` - Stop the bot
-`!bypasson` - Turn on bypass mode (adds delays to avoid limits)
-`!bypassoff` - Turn off bypass mode
-`!test` - Test if bot is responding
-`!ping` - Check bot latency
-`!help` - Show this help message
+**👥 Public:**
+`{bot.command_prefix}claim <key>` - Claim a key
+`{bot.command_prefix}panel` - Open config panel
+`{bot.command_prefix}start` - Start sending messages
+`{bot.command_prefix}status` - Check running status
+`{bot.command_prefix}stop` - Stop the bot
+`{bot.command_prefix}bypasson` - Enable bypass (delays + retries)
+`{bot.command_prefix}bypassoff` - Disable bypass
+`{bot.command_prefix}test` - Test if bot responds
+`{bot.command_prefix}ping` - Check latency
+`{bot.command_prefix}help` - Show this
 
-**Setup Process:**
-1. Get a key from an admin
-2. Claim your key: `!claim your_key_here`
-3. Open the panel: `!panel` (popup form will appear!)
-4. Fill in your token, channels, minutes, and message
-5. Start the bot: `!start`
-6. (Optional) Enable bypass: `!bypasson`
+**Setup:**
+1. Claim a key: `{bot.command_prefix}claim <key>`
+2. Configure: `{bot.command_prefix}panel`
+3. Start: `{bot.command_prefix}start`
+4. (Optional) Enable bypass: `{bot.command_prefix}bypasson`
 
-**⚠️ Warning:** This is a self-bot and violates Discord's ToS. Use at your own risk.
-    """
+**⚠️ Self-bot – use at your own risk.**
+"""
     await ctx.send(help_text)
 
 # ============ ERROR HANDLER ============
 @bot.event
 async def on_command_error(ctx, error):
-    print(f"❌ Error: {error}")
     if isinstance(error, commands.CheckFailure):
-        await ctx.send("❌ **Access Denied!** This command is for admins only.")
+        await ctx.send("❌ **Access Denied!** Admin only.")
     elif isinstance(error, commands.CommandNotFound):
-        await ctx.send("❌ Unknown command. Use `!help` for available commands.")
+        await ctx.send(f"❌ Unknown command. Use `{bot.command_prefix}help`.")
     else:
         await ctx.send(f"❌ Error: {str(error)}")
 
@@ -679,19 +610,15 @@ if __name__ == "__main__":
     print("⚠️  WARNING: This is a self-bot and violates Discord's ToS")
     print("⚠️  Use at your own risk. Your account could be banned.")
     print("====================")
-    
     token = os.getenv('BOT_TOKEN')
     if not token:
         token = input("Enter your Discord token: ").strip()
-    
     if not token:
         print("❌ No token provided!")
-        print("Please set BOT_TOKEN environment variable or enter token manually.")
         exit(1)
-    
     try:
         bot.run(token)
     except discord.LoginFailure:
-        print("❌ Invalid token. Please try again.")
+        print("❌ Invalid token.")
     except Exception as e:
         print(f"❌ Error: {e}")
