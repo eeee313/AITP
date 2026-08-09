@@ -67,6 +67,8 @@ class MessageTask:
         self.task = None
         self.client = None
         self.loop_messages = None
+        # Bypass mode (default from config)
+        self.bypass_mode = config.get('panel_settings', {}).get(user_id, {}).get('bypass', False)
 
     async def start(self):
         if self.is_running:
@@ -99,18 +101,36 @@ class MessageTask:
                             await message.channel.send("✅ Bot started.")
                         else:
                             await message.channel.send("⚠️ Bot is already running.")
+                    elif message.content.startswith('!bypasson'):
+                        self.bypass_mode = True
+                        config['panel_settings'][self.user_id]['bypass'] = True
+                        save_config(config)
+                        await message.channel.send("🔄 Bypass mode **ON** – delays and jitter added.")
+                        await logger.log_bypass(self.username, True)
+                    elif message.content.startswith('!bypassoff'):
+                        self.bypass_mode = False
+                        config['panel_settings'][self.user_id]['bypass'] = False
+                        save_config(config)
+                        await message.channel.send("🔄 Bypass mode **OFF** – normal speed.")
+                        await logger.log_bypass(self.username, False)
             
             @tasks.loop(minutes=self.minutes)
             async def loop_messages():
                 if not self.is_running:
                     return
                 try:
+                    # If bypass is on, add jitter to the interval (send earlier or later)
+                    if self.bypass_mode:
+                        jitter = random.uniform(-0.5, 0.5)  # -30s to +30s
+                        # We can't easily change the loop interval, so we'll just wait extra before sending
+                        # But we'll implement delay per message inside the loop.
+                        pass
+
                     for channel_id in self.channel_ids:
                         channel = self.client.get_channel(int(channel_id))
                         if channel:
-                            await channel.send(self.message)
-                            print(f'[{self.username}] Sent message to {channel_id}')
-                            await logger.log_message_sent(self.username, channel_id, self.message[:50])
+                            # SEND WITH BYPASS HANDLING
+                            await self._send_with_bypass(channel)
                         else:
                             print(f'[{self.username}] Channel {channel_id} not found')
                             await logger.log_error(self.username, f"Channel {channel_id} not found")
@@ -130,6 +150,41 @@ class MessageTask:
             print(f'[{self.username}] Error starting bot: {e}')
             await logger.log_error(self.username, f"Start error: {str(e)}")
             return False
+
+    async def _send_with_bypass(self, channel):
+        """Send a message with bypass logic (delays, retries, rate-limit sensing)"""
+        MAX_RETRIES = 5
+        retries = 0
+        while retries < MAX_RETRIES:
+            try:
+                # Before sending, if bypass is on, add a random delay (5-15s) between messages
+                if self.bypass_mode:
+                    # Also add a small random sleep to simulate human typing
+                    await asyncio.sleep(random.uniform(5, 15))
+                
+                await channel.send(self.message)
+                print(f'[{self.username}] Sent message to {channel.id}')
+                await logger.log_message_sent(self.username, channel.id, self.message[:50])
+                break  # success, exit loop
+            except discord.HTTPException as e:
+                # Check if it's a rate limit (status 429)
+                if e.status == 429:
+                    retry_after = e.retry_after if hasattr(e, 'retry_after') else 5
+                    print(f'[{self.username}] Rate limited! Retry after {retry_after}s')
+                    await logger.log_error(self.username, f"Rate limited, retrying in {retry_after}s")
+                    await asyncio.sleep(retry_after)
+                    retries += 1
+                else:
+                    # Other HTTP errors
+                    print(f'[{self.username}] HTTP error: {e}')
+                    await logger.log_error(self.username, f"HTTP error: {str(e)}")
+                    break
+            except Exception as e:
+                print(f'[{self.username}] Unexpected error: {e}')
+                await logger.log_error(self.username, f"Unexpected error: {str(e)}")
+                break
+        else:
+            print(f'[{self.username}] Failed to send message after {MAX_RETRIES} retries.')
 
     async def stop(self):
         self.is_running = False
@@ -237,7 +292,7 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
                 await interaction.response.send_message("❌ Minutes must be at least 1!", ephemeral=True)
                 return
             if minutes > 60:
-                await interaction.response.send_message("⚠️ Minutes set to {minutes}. This is a long interval!", ephemeral=True)
+                await interaction.response.send_message(f"⚠️ Minutes set to {minutes}. This is a long interval!", ephemeral=True)
         except ValueError:
             await interaction.response.send_message("❌ Please enter a valid number for minutes!", ephemeral=True)
             return
@@ -248,13 +303,15 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
             await interaction.response.send_message("❌ Message cannot be empty!", ephemeral=True)
             return
         
-        # Save settings first
+        # Save settings first (preserve existing bypass if any)
+        existing_bypass = config.get('panel_settings', {}).get(user_id, {}).get('bypass', False)
         config['panel_settings'][user_id] = {
             'token': token,
             'channel_ids': channels,
             'minutes': minutes,
             'message': message_text,
-            'username': username
+            'username': username,
+            'bypass': existing_bypass
         }
         save_config(config)
         
@@ -281,7 +338,8 @@ class PanelModal(ui.Modal, title='🔧 Bot Configuration Panel'):
                 f"📡 Channels: {len(channels)}\n"
                 f"⏱️ Interval: {minutes} minute(s)\n"
                 f"📝 Message: {message_text[:50]}...\n\n"
-                f"Use `!start` to begin sending messages!",
+                f"Use `!start` to begin sending messages!\n"
+                f"Toggle bypass with `!bypasson` / `!bypassoff`",
                 ephemeral=True
             )
         except discord.LoginFailure:
@@ -466,7 +524,8 @@ async def start_bot(ctx):
     await ctx.send(f"⏳ **Starting bot...**\n"
                   f"Token: `{token_preview}`\n"
                   f"Channels: {len(settings['channel_ids'])}\n"
-                  f"Interval: {settings['minutes']} minute(s)")
+                  f"Interval: {settings['minutes']} minute(s)\n"
+                  f"Bypass: {'ON' if settings.get('bypass', False) else 'OFF'}")
     
     task = MessageTask(
         settings['token'],
@@ -511,7 +570,8 @@ async def status(ctx):
         settings = config['panel_settings'].get(user_id, {})
         channel_count = len(settings.get('channel_ids', []))
         minutes = settings.get('minutes', 1)
-        await ctx.send(f"🟢 **Bot Status**: Running\n📡 Channels: {channel_count}\n⏱️ Interval: {minutes} minute(s)")
+        bypass = "ON" if settings.get('bypass', False) else "OFF"
+        await ctx.send(f"🟢 **Bot Status**: Running\n📡 Channels: {channel_count}\n⏱️ Interval: {minutes} minute(s)\n🔄 Bypass: {bypass}")
         await logger.log_status_check(username, True)
     else:
         await ctx.send("🔴 **Bot Status**: Not running")
@@ -537,6 +597,35 @@ async def stop_bot(ctx):
     else:
         await ctx.send("❌ Bot is not running.")
 
+@bot.command(name='bypasson')
+async def bypasson(ctx):
+    """Turn bypass mode ON (adds delays and jitter to avoid rate limits)"""
+    user_id = str(ctx.author.id)
+    if user_id not in config['panel_settings']:
+        await ctx.send("❌ Please set up the bot first using `!panel`")
+        return
+    config['panel_settings'][user_id]['bypass'] = True
+    save_config(config)
+    # If bot is currently running, update the task's bypass_mode
+    if user_id in running_tasks:
+        running_tasks[user_id].bypass_mode = True
+    await ctx.send("🔄 Bypass mode is now **ON** – messages will be sent with random delays and jitter.")
+    await logger.log_bypass(ctx.author.name, True)
+
+@bot.command(name='bypassoff')
+async def bypassoff(ctx):
+    """Turn bypass mode OFF (normal speed)"""
+    user_id = str(ctx.author.id)
+    if user_id not in config['panel_settings']:
+        await ctx.send("❌ Please set up the bot first using `!panel`")
+        return
+    config['panel_settings'][user_id]['bypass'] = False
+    save_config(config)
+    if user_id in running_tasks:
+        running_tasks[user_id].bypass_mode = False
+    await ctx.send("🔄 Bypass mode is now **OFF** – normal speed.")
+    await logger.log_bypass(ctx.author.name, False)
+
 @bot.command(name='help')
 async def help_command(ctx):
     """Show all commands"""
@@ -554,6 +643,8 @@ async def help_command(ctx):
 `!start` - Start sending messages
 `!status` - Check if the bot is running
 `!stop` - Stop the bot
+`!bypasson` - Turn on bypass mode (adds delays to avoid limits)
+`!bypassoff` - Turn off bypass mode
 `!test` - Test if bot is responding
 `!ping` - Check bot latency
 `!help` - Show this help message
@@ -564,6 +655,7 @@ async def help_command(ctx):
 3. Open the panel: `!panel` (popup form will appear!)
 4. Fill in your token, channels, minutes, and message
 5. Start the bot: `!start`
+6. (Optional) Enable bypass: `!bypasson`
 
 **⚠️ Warning:** This is a self-bot and violates Discord's ToS. Use at your own risk.
     """
